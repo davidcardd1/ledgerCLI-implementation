@@ -5,30 +5,35 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/urfave/cli/v2"
 )
 
-var app = cli.NewApp()
-var file string
-var comments = []rune{'!', ';', '#', '%', '|', '*'}
+var (
+	app = cli.NewApp()
+	file string
+	comments = []rune{'!', ';', '#', '%', '|', '*'}
+	ledgerData = []string{}
+	transactions = []Transaction{}
+	accounts = []Account{}
+	commodities = []Commodity{}
+)
 
 type Transaction struct {
-	file 		string
 	date 		time.Time
 	payee 		string
-	postings	[]*Posting
+	postings	[]Posting
 
 }
 
 type Posting struct {
-	transaction 	*Transaction
-	account 		*Account
-	commodity 		*Commodity
-	commodityDate	time.Time
+	account 		Account
+	commodity 		Commodity
 	amount 			float64
 }
 
@@ -73,9 +78,70 @@ func fileReader(file string) {
 			}
 		}
 		if !isComment {
-			fmt.Println(line)
+			// fmt.Println(line)
+			ledgerData = append(ledgerData, line)
 		}
 	}
+}
+
+func parseData () {
+
+	transaction := Transaction{}
+
+	for _,line := range ledgerData {
+		transInfo := strings.Split(line, " ")
+	
+		if matches, _ := regexp.MatchString(`\d{4}\/(1[0-2]|[1-9])\/(3[0-1]|[1-2][0-9]|[1-9])$`, transInfo[0]); matches {
+			const layout = "2006/1/2"
+			date, _ := time.Parse(layout, transInfo[0])
+			payee := strings.Join(transInfo[1:]," ")
+			
+			//fmt.Printf("%v %v \n", date, payee)
+
+			transactions = append(transactions, transaction)
+			transaction = Transaction{}
+			transaction.date = date
+			transaction.payee = payee
+
+		} else {
+			postingInfo := strings.Split(line, "\t")
+
+			account := postingInfo[1]
+			quantity := postingInfo[2:]
+			var commodity string
+			var amount float64
+
+			for _,x := range quantity {
+				if x != "" {
+					if x[0] == '$' || strings.HasPrefix(x, "-$"){
+						commodity = "$"
+						amount, _ = strconv.ParseFloat(strings.Replace(x, "$", "", 1), 64)
+					} else {
+						s := strings.Split(x, " ")
+						commodity = s[1]
+						amount, _= strconv.ParseFloat(s[0], 64)
+					}
+					break
+				}
+			}
+
+			// fmt.Printf("%q \n", account)
+			// fmt.Printf("%q \n", commodity)
+			// fmt.Printf("%v \n", amount)
+
+			newAccount := Account{account, true}
+			newCommodity := Commodity{name: commodity}
+
+			accounts = append(accounts, newAccount)
+			commodities = append(commodities, newCommodity)
+
+			newPosting := Posting{newAccount, newCommodity, amount}
+
+			transaction.postings = append(transaction.postings, newPosting)
+			newPosting = Posting{}
+		}
+	}
+	transactions = append(transactions, transaction)
 }
 
 func flags() {
@@ -92,10 +158,6 @@ func flags() {
 			Usage:   "Read ledger file using `FILE`",
 			Value: "index.ledger",
 			Destination: &file,
-			Action: func(ctx *cli.Context, s string) error {
-				fileReader(file)
-				return nil
-			},
 		},
 		&cli.StringFlag{
 			Name:    "price-db",
@@ -131,6 +193,9 @@ func commands() {
 			Action: func (c *cli.Context) error {
 				fmt.Println("selected print")
 				fileReader(file)
+				parseData()
+
+				fmt.Printf("%v", transactions)
 				return nil
 			},
 		},
