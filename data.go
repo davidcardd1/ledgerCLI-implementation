@@ -2,8 +2,10 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,8 +19,10 @@ var (
 	priceDBFile string
 	comments = []rune{'!', ';', '#', '%', '|', '*'}
 	ledgerData = []string{}
+	pricesData = []string{}
 	transactions = []Transaction{}
 	commodities = []Commodity{}
+	changedCommodities = make(map[string]float64)
 	root = &Account{name: "root", children: make(map[string]*Account), balance: make(map[string]float64)}
 )
 
@@ -85,6 +89,71 @@ func fileReader(file string) {
 		if !isComment {
 			// fmt.Println(line)
 			ledgerData = append(ledgerData, line)
+		}
+	}
+}
+
+func readPrices(file string) {
+	f, err := os.Open(file)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Split(bufio.ScanLines)
+
+	var lines []string
+
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+
+
+	for _, line := range lines {
+		isComment := false
+		if strings.HasPrefix(line, "!include") {
+			fileReader(strings.Split(line, " ")[1])
+		}
+		for _, c := range comments {
+			if c == rune(line[0]) {
+				isComment = true
+				break
+			}
+		}
+		if !isComment {
+			if strings.HasPrefix(line, "P") {
+				pricesData = append(ledgerData, line)
+				fmt.Printf("%q\n", pricesData)
+			}
+		}
+	}
+
+	for _,line := range pricesData {
+		lineN := strings.Split(line, " ")
+		var am float64
+		am, _ = strconv.ParseFloat(lineN[4][1:], 64) 
+		newCommodities(lineN[3], am)
+		changedCommodities[lineN[3]] = am
+
+	}
+	changeCommodities()
+}
+
+func changeCommodities () {
+	for _,t := range transactions {
+		for _, p := range t.postings {
+			for name, price := range changedCommodities {
+				if p.commodity.name != name {
+					if p.commodity.name != "$" {
+						p.commodity.name = "$"
+						p.amount *= price
+					}
+					p.commodity.name = name
+					p.amount /= price
+				}
+			}
 		}
 	}
 }

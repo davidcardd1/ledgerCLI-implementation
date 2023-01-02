@@ -37,6 +37,15 @@ func flags() {
 			Name:    "price-db",
 			Usage:   "Use `FILE` for retrieving stored commodity prices.",
 			Destination: &priceDBFile,
+			Action: func(ctx *cli.Context, s string) error {
+				_, err := os.Open(priceDBFile)
+
+				if err != nil {
+					log.Fatal(err)
+				}
+				readPrices(priceDBFile)
+				return nil
+			},
 		},
 	}
 }
