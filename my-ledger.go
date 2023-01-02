@@ -24,8 +24,8 @@ var (
 	comments = []rune{'!', ';', '#', '%', '|', '*'}
 	ledgerData = []string{}
 	transactions = []Transaction{}
-	accounts = []Account{}
 	commodities = []Commodity{}
+	root = &Account{name: "root", children: make(map[string]*Account), balance: make(map[string]float64)}
 )
 
 type Transaction struct {
@@ -41,8 +41,9 @@ type Posting struct {
 }
 
 type Account struct {
-	name 		string
-	hasposting	bool
+	name 			string
+	balance			map[string]float64
+	children		map[string]*Account
 }
 
 type Commodity struct {
@@ -51,12 +52,12 @@ type Commodity struct {
 }
 
 type registerRow struct {
-		date		string
-		payee		string
-		account		string
-		amount		string
-		rBalance	string
-	}
+	date		string
+	payee		string
+	account		string
+	amount		string
+	rBalance	string
+}
 
 func fileReader(file string) {
 	f, err := os.Open("./ledger-sample-files/"+file)
@@ -92,6 +93,49 @@ func fileReader(file string) {
 			ledgerData = append(ledgerData, line)
 		}
 	}
+}
+
+
+func newCommodities (name string, price float64) {
+	if len(commodities) == 0 {
+		commodities = append(commodities, Commodity{name, price})
+	}
+	exists := false
+
+	for _, comms := range commodities {
+		if comms.name == name {
+			exists = true
+		}
+	}
+
+	if !exists {
+		commodities = append(commodities, Commodity{name, price})
+	}
+}
+
+func (r *Account) addChildren (names []string, amount float64, comm string) {
+	if len(names) == 0 {
+		return
+	}
+
+	child, ok := r.children[names[0]]
+
+	if !ok {
+		child = &Account{name: names[0], children: make(map[string]*Account), balance: make(map[string]float64)}
+	}
+
+	child.balance[comm] += amount
+	r.children[names[0]] = child
+	
+	child.addChildren(names[1:], amount, comm)
+}
+
+func newAccounts(name string, amount float64, comm string) {
+	name = strings.TrimSpace(name)
+	names := strings.Split(name, ":")
+
+	root.addChildren(names, amount, comm)
+
 }
 
 func appendTransaction(transactions *[]Transaction, transaction *Transaction) {
@@ -160,21 +204,15 @@ func parseData () {
 					}
 				}
 
-				newAccount := Account{account, true}
-				newCommodity := Commodity{name: commodity, price: price}
-
-				accounts = append(accounts, newAccount)
-				commodities = append(commodities, newCommodity)
-
-				newPosting = Posting{newAccount, newCommodity, amount}
-
 			} else {
-				newAccount := Account{account, true}
-				accounts = append(accounts, newAccount)
-
-				newPosting = Posting{newAccount, Commodity{name: commodity, price: price}, -amount}
-
+				amount = amount * (-1)
 			}
+
+			newAccount := Account{name: account}
+
+			newPosting = Posting{newAccount, Commodity{name: commodity, price: price}, amount}
+			
+			newCommodities(commodity, price)
 			transaction.postings = append(transaction.postings, newPosting)
 			newPosting = Posting{}
 		}
@@ -255,16 +293,16 @@ func printCommand () {
 func printRegisterTable (table []registerRow) {
 	for _,row := range table {
 		if len(row.payee) > 30 {
-			row.payee = row.payee[:29] + ".."
+			row.payee = row.payee[:30] + ".."
 		}
 		if len(row.account) > 20 {
-			row.account = row.account[:19] + ".."
+			row.account = row.account[:20] + ".."
 		}
 		fmt.Printf("%10s %-35s %-25s %15s %15s\n", row.date, row.payee, row.account, row.amount, row.rBalance)
 	}
 }
 
-func registerCommand () {
+func registerCommand (args cli.Args) {
 
 	registerTable := []registerRow{}
 	runningBalances := make(map[string]float64)
@@ -300,7 +338,141 @@ func registerCommand () {
 	printRegisterTable(registerTable)
 }
 
-func balanceCommand () {
+func orgAccounts () {
+	for _, t := range transactions {
+		for _, p := range t.postings {
+			newAccounts(p.account.name, p.amount, p.commodity.name)
+		}
+	}
+}
+
+func printAccounts(r *Account, argsv []string) {
+	if len(r.children) == 1 {
+		count := 0
+		for kk := range r.children {
+			for _,arg := range argsv {
+				if arg == r.name {
+					for k, v := range r.balance {
+					if count > 0 {
+						if k == "$" {
+							fmt.Printf("%15s %s\n", fmt.Sprintf("%v%.2f", k, v), " ")
+						} else {
+							fmt.Printf("%15s %s\n", fmt.Sprintf("%.2f %v", v, k), " ")
+						}
+					} else {
+						if k == "$" {
+							fmt.Printf("%15s %s\n", fmt.Sprintf("%v%.2f", k, v), r.name+":"+kk)
+						} else {
+							fmt.Printf("%15s %s\n", fmt.Sprintf("%.2f %v", v, k), r.name+":"+kk)
+						}
+					}
+					count++
+				}
+				}
+			}
+			
+		}
+	} else {
+		count := 0
+
+		for _,arg := range argsv {
+			if arg == r.name {
+				for k, v := range r.balance {
+		
+					if count > 0 {
+						if k == "$" {
+						fmt.Printf("%15s %s\n", fmt.Sprintf("%v%.2f", k, v), " ")
+						} else {
+							fmt.Printf("%15s %s\n", fmt.Sprintf("%.2f %v", v, k), " ")
+						}
+					} else {
+						if k == "$" {
+							fmt.Printf("%15s %s\n", fmt.Sprintf("%v%.2f", k, v), r.name)
+						} else {
+							fmt.Printf("%15s %s\n", fmt.Sprintf("%.2f %v", v, k), r.name)
+						}
+					}
+					count++
+				}
+			}
+		}
+
+		for _,child := range r.children {
+			printAccounts(child, argsv)
+		}
+	}
+}
+
+func printAccountsA(r *Account) {
+	if len(r.children) == 1 {
+		count := 0
+		for kk := range r.children {
+					for k, v := range r.balance {
+					if count > 0 {
+						if k == "$" {
+							fmt.Printf("%15s %s\n", fmt.Sprintf("%v%.2f", k, v), " ")
+						} else {
+							fmt.Printf("%15s %s\n", fmt.Sprintf("%.2f %v", v, k), " ")
+						}
+					} else {
+						if k == "$" {
+							fmt.Printf("%15s %s\n", fmt.Sprintf("%v%.2f", k, v), r.name+":"+kk)
+						} else {
+							fmt.Printf("%15s %s\n", fmt.Sprintf("%.2f %v", v, k), r.name+":"+kk)
+						}
+					}
+					count++
+			}
+			
+		}
+	} else {
+		count := 0
+				for k, v := range r.balance {
+		
+					if count > 0 {
+						if k == "$" {
+						fmt.Printf("%15s %s\n", fmt.Sprintf("%v%.2f", k, v), " ")
+						} else {
+							fmt.Printf("%15s %s\n", fmt.Sprintf("%.2f %v", v, k), " ")
+						}
+					} else {
+						if k == "$" {
+							fmt.Printf("%15s %s\n", fmt.Sprintf("%v%.2f", k, v), r.name)
+						} else {
+							fmt.Printf("%15s %s\n", fmt.Sprintf("%.2f %v", v, k), r.name)
+						}
+					}
+					count++
+		}
+
+		for _,child := range r.children {
+			printAccountsA(child)
+		}
+	}
+}
+
+func balanceCommand (args cli.Args) {
+	orgAccounts()
+	if args.Len() > 0 {
+		printAccounts(root, args.Slice())
+	} else {
+		printAccountsA(root)
+	}
+
+	for _,vC := range root.children {
+		for k, v := range vC.balance {
+			root.balance[k] += v
+		}
+	}
+
+	fmt.Println("----------------")
+	for k, v := range root.balance {
+		if k == "$" {
+			fmt.Printf("%15s\n", fmt.Sprintf("%v%.2f", k, v))
+		} else {
+			fmt.Printf("%15s\n", fmt.Sprintf("%.2f %v", v, k))
+		}
+	}
 
 }
 
@@ -346,7 +518,7 @@ func commands() {
 				fileReader(file)
 				parseData()
 				sortTransactions()
-				balanceCommand()
+				balanceCommand(c.Args())
 				return nil
 			},
 		},
@@ -359,7 +531,7 @@ func commands() {
 				fileReader(file)
 				parseData()
 				sortTransactions()
-				registerCommand()
+				registerCommand(c.Args())
 				return nil
 			},
 		},
