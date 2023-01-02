@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"regexp"
 	"sort"
@@ -31,7 +32,6 @@ type Transaction struct {
 	date 		time.Time
 	payee 		string
 	postings	[]Posting
-
 }
 
 type Posting struct {
@@ -50,6 +50,13 @@ type Commodity struct {
 	price	float64 
 }
 
+type registerRow struct {
+		date		string
+		payee		string
+		account		string
+		amount		string
+		rBalance	string
+	}
 
 func fileReader(file string) {
 	f, err := os.Open("./ledger-sample-files/"+file)
@@ -87,9 +94,28 @@ func fileReader(file string) {
 	}
 }
 
+func appendTransaction(transactions *[]Transaction, transaction *Transaction) {
+	var sum float64
+	for _,posting := range transaction.postings {
+		sum += posting.amount * posting.commodity.price
+	}
+
+	if sum > 0.05 || sum <= -.05 {
+		log.Fatal("Transaction doesn't balance");
+	} else {
+		*transactions = append(*transactions, *transaction)
+	}
+}
+
 func parseData () {
 
 	transaction := Transaction{}
+	var (
+			newPosting Posting
+			commodity string
+			amount float64
+			price float64
+		) 
 
 	reg, err := regexp.Compile(`\d{4}\/(1[0-2]|[1-9])\/(3[0-1]|[1-2][0-9]|[1-9])$`)
 	
@@ -100,13 +126,12 @@ func parseData () {
 
 	for _,line := range ledgerData {
 		transInfo := strings.Split(line, " ")
-	
+
 		if matches := reg.MatchString(transInfo[0]); matches {
 			const layout = "2006/1/2"
 			date, _ := time.Parse(layout, transInfo[0])
 			payee := strings.Join(transInfo[1:]," ")
 			
-			//fmt.Printf("%v %v \n", date, payee)
 
 			transactions = append(transactions, transaction)
 			transaction = Transaction{}
@@ -118,38 +143,38 @@ func parseData () {
 
 			account := postingInfo[1]
 			quantity := postingInfo[2:]
-			var commodity string
-			var amount float64
-			var price float64
-
-			for _,x := range quantity {
-				if x != "" {
-					if x[0] == '$' || strings.HasPrefix(x, "-$"){
-						commodity = "$"
-						price = 1
-						amount, _ = strconv.ParseFloat(strings.Replace(x, "$", "", 1), 64)
-					} else {
-						s := strings.Split(x, " ")
-						commodity = s[1]
-						price = 0
-						amount, _= strconv.ParseFloat(s[0], 64)
+			if len(quantity) != 0 {
+				for _,x := range quantity {
+					if x != "" {
+						if x[0] == '$' || strings.HasPrefix(x, "-$"){
+							commodity = "$"
+							price = 1
+							amount, _ = strconv.ParseFloat(strings.Replace(x, "$", "", 1), 64)
+						} else {
+							s := strings.Split(x, " ")
+							commodity = s[1]
+							price = 0
+							amount, _= strconv.ParseFloat(s[0], 64)
+						}
+						break
 					}
-					break
 				}
+
+				newAccount := Account{account, true}
+				newCommodity := Commodity{name: commodity, price: price}
+
+				accounts = append(accounts, newAccount)
+				commodities = append(commodities, newCommodity)
+
+				newPosting = Posting{newAccount, newCommodity, amount}
+
+			} else {
+				newAccount := Account{account, true}
+				accounts = append(accounts, newAccount)
+
+				newPosting = Posting{newAccount, Commodity{name: commodity, price: price}, -amount}
+
 			}
-
-			// fmt.Printf("%q \n", account)
-			// fmt.Printf("%q \n", commodity)
-			// fmt.Printf("%v \n", amount)
-
-			newAccount := Account{account, true}
-			newCommodity := Commodity{name: commodity, price: price}
-
-			accounts = append(accounts, newAccount)
-			commodities = append(commodities, newCommodity)
-
-			newPosting := Posting{newAccount, newCommodity, amount}
-
 			transaction.postings = append(transaction.postings, newPosting)
 			newPosting = Posting{}
 		}
@@ -170,24 +195,113 @@ func sortTransactions () {
 			return transactions[i].payee < transactions[j].payee
 		})
 	case "a", "amount":
+		sort.Slice(transactions, func(i, j int) bool {
+			return math.Abs(transactions[i].postings[0].amount) < math.Abs(transactions[j].postings[0].amount)
+		})
 	}
 }
 
 func printCommand () {
 	for _, transaction := range transactions {
 		fmt.Printf("\n%v %v \n", time.Time.Format(transaction.date, "2006/01/02"), transaction.payee)
-		for _, posting := range transaction.postings {
-			if posting.amount != 0 {
+		if len(transaction.postings) == 2 {
+			if transaction.postings[0].commodity.name ==  transaction.postings[1].commodity.name{
+				if math.Abs(transaction.postings[0].amount) == math.Abs(transaction.postings[1].amount) {
+					if transaction.postings[0].commodity.name == "$" {
+						fmt.Printf("    %-30s %15s\n", transaction.postings[0].account.name, fmt.Sprintf("%v%.2f", transaction.postings[0].commodity.name, transaction.postings[0].amount))
+						fmt.Printf("    %-30s\n", transaction.postings[1].account.name)
+					} else {
+						fmt.Printf("    %-30s %15s\n", transaction.postings[0].account.name, fmt.Sprintf("%.1f %v", transaction.postings[0].amount, transaction.postings[0].commodity.name))
+						fmt.Printf("    %-30s\n", transaction.postings[1].account.name)
+					}
+				} else {
+					if transaction.postings[0].commodity.name == "$" {
+						fmt.Printf("    %-30s %15s\n", transaction.postings[0].account.name, fmt.Sprintf("%v%.2f", transaction.postings[0].commodity.name, transaction.postings[0].amount))
+					} else {
+						fmt.Printf("    %-30s %15s\n", transaction.postings[0].account.name, fmt.Sprintf("%.1f %v", transaction.postings[0].amount, transaction.postings[0].commodity.name))
+					}
+					if transaction.postings[1].commodity.name == "$" {
+						fmt.Printf("    %-30s %15s\n", transaction.postings[1].account.name, fmt.Sprintf("%v%.2f", transaction.postings[1].commodity.name, transaction.postings[1].amount))
+					} else {
+						fmt.Printf("    %-30s %15s\n", transaction.postings[1].account.name, fmt.Sprintf("%.1f %v", transaction.postings[1].amount, transaction.postings[1].commodity.name))
+					}
+				}
+			} else {
+				if transaction.postings[0].commodity.name == "$" {
+					transaction.postings[1].commodity.price = transaction.postings[0].amount / transaction.postings[1].amount
+					fmt.Printf("    %-30s %15s\n", transaction.postings[0].account.name, fmt.Sprintf("%v%.2f", transaction.postings[0].commodity.name, transaction.postings[0].amount))
+				} else {
+					fmt.Printf("    %-30s %15s\n", transaction.postings[0].account.name, fmt.Sprintf("%.1f %v", transaction.postings[0].amount, transaction.postings[0].commodity.name))
+				}
+				if transaction.postings[1].commodity.name == "$" {
+					transaction.postings[0].commodity.price = transaction.postings[1].amount / transaction.postings[0].amount
+					fmt.Printf("    %-30s %15s\n", transaction.postings[1].account.name, fmt.Sprintf("%v%.2f", transaction.postings[1].commodity.name, transaction.postings[1].amount))
+				} else {
+					fmt.Printf("    %-30s %15s\n", transaction.postings[1].account.name, fmt.Sprintf("%.1f %v", transaction.postings[1].amount, transaction.postings[1].commodity.name))
+				}
+			}
+		} else {
+			for _, posting := range transaction.postings {
 				if posting.commodity.name == "$" {
 					fmt.Printf("    %-30s %15s\n", posting.account.name, fmt.Sprintf("%v%.2f", posting.commodity.name, posting.amount))
 				} else {
 					fmt.Printf("    %-30s %15s\n", posting.account.name, fmt.Sprintf("%.1f %v", posting.amount, posting.commodity.name))
 				}
-			} else {
-				fmt.Printf("    %-30s\n", posting.account.name)
 			}
 		}
 	}
+}
+
+func printRegisterTable (table []registerRow) {
+	for _,row := range table {
+		if len(row.payee) > 30 {
+			row.payee = row.payee[:29] + ".."
+		}
+		if len(row.account) > 20 {
+			row.account = row.account[:19] + ".."
+		}
+		fmt.Printf("%10s %-35s %-25s %15s %15s\n", row.date, row.payee, row.account, row.amount, row.rBalance)
+	}
+}
+
+func registerCommand () {
+
+	registerTable := []registerRow{}
+	runningBalances := make(map[string]float64)
+	var rowAux registerRow
+
+	for _,transaction := range transactions {
+
+		//fmt.Printf("\n%10s %-30s\t", time.Time.Format(transaction.date, "06-Jan-02"), transaction.payee)
+		rowAux.date = time.Time.Format(transaction.date, "06-Jan-02")
+		rowAux.payee = transaction.payee
+
+		for _,posting := range transaction.postings {
+			runningBalances[posting.commodity.name] += posting.amount
+			rowAux.account = posting.account.name
+
+			if posting.commodity.name == "$" {
+				rowAux.amount = fmt.Sprintf("%v%.2f", posting.commodity.name, posting.amount)
+			} else {
+				rowAux.amount = fmt.Sprintf("%.1f %v", posting.amount, posting.commodity.name)
+			}
+
+			for commodity, balance := range runningBalances {
+				if commodity == "$" {
+					rowAux.rBalance = fmt.Sprintf("%v%.2f", commodity, balance)
+				} else {
+					rowAux.rBalance = fmt.Sprintf("%.1f %v", balance, commodity)
+				}
+				registerTable = append(registerTable, rowAux)
+				rowAux = registerRow{}
+			}
+		}
+	}
+	printRegisterTable(registerTable)
+}
+
+func balanceCommand () {
+
 }
 
 func flags() {
@@ -220,6 +334,7 @@ func flags() {
 		},
 	}
 }
+
 func commands() {
 	app.Commands = []*cli.Command{
 		{
@@ -229,6 +344,9 @@ func commands() {
 			Action: func (c *cli.Context) error {
 				fmt.Println("selected balance")
 				fileReader(file)
+				parseData()
+				sortTransactions()
+				balanceCommand()
 				return nil
 			},
 		},
@@ -239,6 +357,9 @@ func commands() {
 			Action: func (c *cli.Context) error {
 				fmt.Println("selected register")
 				fileReader(file)
+				parseData()
+				sortTransactions()
+				registerCommand()
 				return nil
 			},
 		},
