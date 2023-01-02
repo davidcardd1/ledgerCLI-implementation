@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -125,7 +124,6 @@ func readPrices(file string) {
 		if !isComment {
 			if strings.HasPrefix(line, "P") {
 				pricesData = append(ledgerData, line)
-				fmt.Printf("%q\n", pricesData)
 			}
 		}
 	}
