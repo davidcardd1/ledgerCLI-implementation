@@ -12,11 +12,14 @@ import (
 	"time"
 
 	"github.com/urfave/cli/v2"
+	"golang.org/x/exp/slices"
 )
 
 var (
 	app = cli.NewApp()
 	file string
+	sortOption string
+	priceDBFile string
 	comments = []rune{'!', ';', '#', '%', '|', '*'}
 	ledgerData = []string{}
 	transactions = []Transaction{}
@@ -88,10 +91,17 @@ func parseData () {
 
 	transaction := Transaction{}
 
+	reg, err := regexp.Compile(`\d{4}\/(1[0-2]|[1-9])\/(3[0-1]|[1-2][0-9]|[1-9])$`)
+	
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
 	for _,line := range ledgerData {
 		transInfo := strings.Split(line, " ")
 	
-		if matches, _ := regexp.MatchString(`\d{4}\/(1[0-2]|[1-9])\/(3[0-1]|[1-2][0-9]|[1-9])$`, transInfo[0]); matches {
+		if matches := reg.MatchString(transInfo[0]); matches {
 			const layout = "2006/1/2"
 			date, _ := time.Parse(layout, transInfo[0])
 			payee := strings.Join(transInfo[1:]," ")
@@ -110,15 +120,18 @@ func parseData () {
 			quantity := postingInfo[2:]
 			var commodity string
 			var amount float64
+			var price float64
 
 			for _,x := range quantity {
 				if x != "" {
 					if x[0] == '$' || strings.HasPrefix(x, "-$"){
 						commodity = "$"
+						price = 1
 						amount, _ = strconv.ParseFloat(strings.Replace(x, "$", "", 1), 64)
 					} else {
 						s := strings.Split(x, " ")
 						commodity = s[1]
+						price = 0
 						amount, _= strconv.ParseFloat(s[0], 64)
 					}
 					break
@@ -130,7 +143,7 @@ func parseData () {
 			// fmt.Printf("%v \n", amount)
 
 			newAccount := Account{account, true}
-			newCommodity := Commodity{name: commodity}
+			newCommodity := Commodity{name: commodity, price: price}
 
 			accounts = append(accounts, newAccount)
 			commodities = append(commodities, newCommodity)
@@ -142,6 +155,39 @@ func parseData () {
 		}
 	}
 	transactions = append(transactions, transaction)
+	transactions = transactions[1:]
+}
+
+func sortTransactions () {
+	sortOption = strings.ToLower(sortOption)
+	switch sortOption {
+	case "d", "date":
+		sort.Slice(transactions, func(i, j int) bool {
+			return transactions[i].date.Before(transactions[j].date)
+		})
+	case "p", "payee":
+		sort.Slice(transactions, func(i, j int) bool {
+			return transactions[i].payee < transactions[j].payee
+		})
+	case "a", "amount":
+	}
+}
+
+func printCommand () {
+	for _, transaction := range transactions {
+		fmt.Printf("\n%v %v \n", time.Time.Format(transaction.date, "2006/01/02"), transaction.payee)
+		for _, posting := range transaction.postings {
+			if posting.amount != 0 {
+				if posting.commodity.name == "$" {
+					fmt.Printf("    %-30s %15s\n", posting.account.name, fmt.Sprintf("%v%.2f", posting.commodity.name, posting.amount))
+				} else {
+					fmt.Printf("    %-30s %15s\n", posting.account.name, fmt.Sprintf("%.1f %v", posting.amount, posting.commodity.name))
+				}
+			} else {
+				fmt.Printf("    %-30s\n", posting.account.name)
+			}
+		}
+	}
 }
 
 func flags() {
@@ -150,7 +196,15 @@ func flags() {
 			Name:    "sort",
 			Aliases: []string{"s", "S"},
 			Value:   "date",
-			Usage:   "Sort report using the value expression: `VEXPR`",
+			Usage:   "Sort report using `VEXPR` which is either of ['date'/'d', 'payee'/'p', 'amount'/'a']",
+			Destination: &sortOption,
+			Action: func(ctx *cli.Context, s string) error {
+				options := []string{"date", "d", "payee", "p", "amount", "a"}
+				if !slices.Contains(options, s) {
+					log.Fatalf("Flag sort value '%v' is not 'date', 'payee' or 'amount'", s)
+				}				
+				return nil
+			},
 		},
 		&cli.StringFlag{
 			Name:    "file",
@@ -162,6 +216,7 @@ func flags() {
 		&cli.StringFlag{
 			Name:    "price-db",
 			Usage:   "Use `FILE` for retrieving stored commodity prices.",
+			Destination: &priceDBFile,
 		},
 	}
 }
@@ -194,8 +249,8 @@ func commands() {
 				fmt.Println("selected print")
 				fileReader(file)
 				parseData()
-
-				fmt.Printf("%v", transactions)
+				sortTransactions()
+				printCommand()
 				return nil
 			},
 		},
@@ -205,6 +260,27 @@ func commands() {
 func info() {
 	app.Name = "ledgerCLI"
 	app.Usage = "Works for ledger's commands: balance, register, print"
+	app.Authors = []*cli.Author{{Name:"David Cardenas", Email: "davidcardd1"}}
+	cli.AppHelpTemplate = `NAME:
+   {{.Name}} - {{.Usage}}
+USAGE:
+   {{.HelpName}} {{if .VisibleFlags}}[global options]{{end}}{{if .Commands}} command {{end}} {{if .ArgsUsage}}{{.ArgsUsage}}{{else}}[arguments...]{{end}}
+   {{if len .Authors}}
+AUTHOR:
+   {{range .Authors}}{{ . }}{{end}}
+   {{end}}{{if .Commands}}
+COMMANDS:
+{{range .Commands}}{{if not .HideHelp}}   {{join .Names ", "}}{{ "\t"}}{{.Usage}}{{ "\n" }}{{end}}{{end}}{{end}}{{if .VisibleFlags}}
+GLOBAL OPTIONS:
+   {{range .VisibleFlags}}{{.}}
+   {{end}}{{end}}{{if .Copyright }}
+COPYRIGHT:
+   {{.Copyright}}
+   {{end}}{{if .Version}}
+VERSION:
+   {{.Version}}
+   {{end}}
+   `
 }
 
 func main() {
